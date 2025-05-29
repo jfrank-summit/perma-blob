@@ -19,6 +19,7 @@ const configSchema = z.object({
     confirmations: z.number().int().positive(),
     batchSize: z.number().int().positive(),
     startBlock: z.bigint().optional(),
+    l2Source: z.string(),
   }),
   
   // Auto Drive
@@ -51,6 +52,12 @@ const configSchema = z.object({
     retryCount: z.number().int().positive(),
     retryDelayMs: z.number().int().positive(),
   }).optional(),
+
+  // Blob Archiver
+  blobArchiver: z.object({
+    autoDriveContainerName: z.string().optional(),
+    autoDriveCreateContainerIfNotExists: z.boolean().optional(),
+  }).optional(),
 })
 
 export type Config = z.infer<typeof configSchema>
@@ -74,6 +81,12 @@ const parseEnvBigInt = (value: string | undefined): bigint | undefined => {
   }
 }
 
+// Helper function for parsing boolean environment variables
+const parseEnvBoolean = (value: string | undefined, defaultValue: boolean): boolean => {
+  if (value === undefined) return defaultValue;
+  return value.toLowerCase() === 'true';
+};
+
 export const loadConfig = (): Config => {
   const rawConfig = {
     database: {
@@ -87,6 +100,7 @@ export const loadConfig = (): Config => {
       confirmations: parseEnvNumber(process.env['CONFIRMATIONS'], 3),
       batchSize: parseEnvNumber(process.env['BATCH_SIZE'], 5),
       startBlock: parseEnvBigInt(process.env['START_BLOCK']),
+      l2Source: process.env['L2_SOURCE'] || 'base',
     },
     autoDrive: {
       apiKey: process.env['AUTO_DRIVE_API_KEY'] || '',
@@ -108,6 +122,10 @@ export const loadConfig = (): Config => {
     blobFetcher: {
       retryCount: parseEnvNumber(process.env['BLOB_FETCHER_RETRY_COUNT'], 3),
       retryDelayMs: parseEnvNumber(process.env['BLOB_FETCHER_RETRY_DELAY_MS'], 2000),
+    },
+    blobArchiver: {
+      autoDriveContainerName: process.env['AUTO_DRIVE_CONTAINER_NAME'] || 'eth-l2-blobs',
+      autoDriveCreateContainerIfNotExists: parseEnvBoolean(process.env['AUTO_DRIVE_CREATE_CONTAINER'], true),
     },
   }
   
