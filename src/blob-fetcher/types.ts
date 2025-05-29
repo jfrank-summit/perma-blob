@@ -14,6 +14,7 @@ export type FetchedTransactionBlobs = {
   blockHash: string;
   timestamp: bigint;
   from: string;
+  l2Source: string; // Identifier for the L2 source, carried from ProcessingJob
   expectedBlobVersionedHashes: string[]; // The original list from ProcessingJob
 
   // Actual fetched data

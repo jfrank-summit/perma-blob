@@ -148,6 +148,7 @@ export const createBlobFetcher = (
       blockHash: job.blockHash,
       timestamp: job.timestamp,
       from: job.from,
+      l2Source: job.l2Source,
       expectedBlobVersionedHashes: job.blobVersionedHashes,
       fetchedBlobs: fetchedBlobsForTx,
       allBlobsFound: allExpectedBlobsFound,
