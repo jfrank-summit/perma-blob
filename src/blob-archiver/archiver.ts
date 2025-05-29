@@ -37,36 +37,19 @@ const ensureAutoDriveClient = async (appConfig: Config): Promise<Result<AutoDriv
   }
 };
 
-// Placeholder for ensuring a container exists
-const ensureContainerExists = async (
-  drive: AutoDriveApiClient, // Corrected type
+// Updated: This function now primarily confirms the container name to be used as a path prefix.
+const ensureContainerAsPathPrefix = async (
+  _drive: AutoDriveApiClient, // Drive client not strictly needed if no SDK calls are made here
   containerName: string,
-  createIfNeeded: boolean
+  _createIfNeeded: boolean // Less relevant for path prefixes
 ): Promise<Result<string, Error>> => {
-  try {
-    logger.info(`[BlobArchiver:TODO] Checking/creating container '${containerName}'. Currently a placeholder.`);
-    // Example usage from docs (conceptual)
-    // const containers = await drive.getContainers(); // Fictional method, check SDK for actual
-    // let container = containers.find(c => c.name === containerName);
-    // if (!container && createIfNeeded) {
-    //   logger.info(`[BlobArchiver] Container '${containerName}' not found, creating...`);
-    //   container = await drive.createContainer(containerName, { makePublic: true }); // Check SDK for actual method and options
-    //   logger.info(`[BlobArchiver] Container '${containerName}' created with ID: ${container.id}`);
-    // }
-    // if (!container) {
-    //   return Err(new Error(`Container '${containerName}' not found and creation was not requested or failed.`));
-    // }
-    // return Ok(container.id); // Assuming container object has an id property
-    if (createIfNeeded) {
-      logger.info(`[BlobArchiver:TODO] Placeholder: Would attempt to create container '${containerName}' if it doesn't exist.`);
-    }
-    // For now, we'll just return the name as a placeholder for ID, assuming it will be used directly if needed by upload functions.
-    // Or, if upload functions require an ID, this logic needs to be more robust.
-    return Ok(containerName); 
-  } catch (error: any) {
-    logger.error(`[BlobArchiver] Error ensuring container '${containerName}' exists:`, error);
-    return Err(new Error(`Failed to ensure container '${containerName}': ${error.message}`));
+  if (!containerName || containerName.trim() === '') {
+    const errMsg = 'AutoDrive container name (used as path prefix) cannot be empty.';
+    logger.error(`[BlobArchiver] ${errMsg}`);
+    return Err(new Error(errMsg));
   }
+  logger.info(`[BlobArchiver] Using '${containerName}' as the path prefix (conceptual container) for uploads.`);
+  return Ok(containerName);
 };
 
 const calculateSha256 = (buffer: Buffer): string => {
@@ -93,19 +76,21 @@ export const createBlobArchiver = (appConfig: Config) => {
     }
     const drive = driveClientResult.value;
 
-    const containerName = archiverConfig.autoDriveContainerName;
-    const containerResult = await ensureContainerExists(drive, containerName, archiverConfig.autoDriveCreateContainerIfNotExists);
+    const containerPathPrefixResult = await ensureContainerAsPathPrefix(
+      drive, 
+      archiverConfig.autoDriveContainerName, 
+      archiverConfig.autoDriveCreateContainerIfNotExists
+    );
     
-    if (!containerResult.ok) {
+    if (!containerPathPrefixResult.ok) {
       return {
         transactionHash: jobData.transactionHash,
         success: false,
-        message: `Failed to ensure AutoDrive container '${containerName}': ${containerResult.error.message}`,
-        error: containerResult.error.message,
+        message: `Invalid AutoDrive container/path prefix configuration: ${containerPathPrefixResult.error.message}`,
+        error: containerPathPrefixResult.error.message,
       };
     }
-    const actualContainerIdentifier = containerResult.value; // This is currently containerName, might be an ID in future
-    logger.info(`[BlobArchiver] Using AutoDrive container identifier: '${actualContainerIdentifier}' for tx: ${jobData.transactionHash}`);
+    const containerPathPrefix = containerPathPrefixResult.value; 
 
     if (!jobData.fetchedBlobs || jobData.fetchedBlobs.length === 0) {
       logger.warn(`[BlobArchiver] No blobs to archive for tx: ${jobData.transactionHash}`);
@@ -124,10 +109,10 @@ export const createBlobArchiver = (appConfig: Config) => {
       const blobIndex = jobData.expectedBlobVersionedHashes.indexOf(fetchedBlob.versionedHash);
       if (blobIndex === -1) {
         logger.warn(`[BlobArchiver] Fetched blob ${fetchedBlob.versionedHash} not found in expected list for tx ${jobData.transactionHash}. Skipping.`);
-        // This case should ideally not happen if fetcher is correct
         continue;
       }
 
+      let currentBlobCid: string | undefined = undefined; // Renamed to avoid confusion, scoped to this iteration
       try {
         const rawBlobHex = fetchedBlob.blob.startsWith('0x') ? fetchedBlob.blob.substring(2) : fetchedBlob.blob;
         const blobBuffer = Buffer.from(rawBlobHex, 'hex');
@@ -140,10 +125,10 @@ export const createBlobArchiver = (appConfig: Config) => {
           metadata: {
             blobHash: fetchedBlob.versionedHash,
             l2Source: jobData.l2Source,
-            l1BlockNumber: Number(jobData.blockNumber), // Convert BigInt to Number
+            l1BlockNumber: Number(jobData.blockNumber),
             l1BlockHash: jobData.blockHash,
             blobIndex: blobIndex,
-            timestamp: Number(jobData.timestamp), // Convert BigInt to Number
+            timestamp: Number(jobData.timestamp),
             sizeBytes: blobBuffer.length,
             txHash: jobData.transactionHash,
           },
@@ -153,47 +138,48 @@ export const createBlobArchiver = (appConfig: Config) => {
             sha256: blobSha256,
           },
         };
-
-        const blobContainerJsonString = JSON.stringify(blobContainer);
-        // const blobContainerBuffer = Buffer.from(blobContainerJsonString);
-        // const blobContainerSha256 = calculateSha256(blobContainerBuffer);
         
-        // Placeholder for actual blob upload logic
-        // The filename for AutoDrive could be the blobHash or kzgCommitment to ensure uniqueness if desired.
-        const autoDriveFileName = `${blobContainer.metadata.txHash}-${blobContainer.metadata.blobHash}.json`;
-        logger.info(`[BlobArchiver:TODO] Archiving BlobContainer for ${fetchedBlob.versionedHash} (tx: ${jobData.transactionHash}) as ${autoDriveFileName} to container '${actualContainerIdentifier}'.`);
+        const autoDriveFileName = `${containerPathPrefix}/${blobContainer.metadata.txHash}-${blobContainer.metadata.blobHash}.json`;
         
-        // const uploadResult = await drive.uploadObjectAsJSON(blobContainer, autoDriveFileName, {
-        //    container: actualContainerIdentifier, // Check SDK: how to specify container for uploadObjectAsJSON
-        //    compression: true, // Optional
-        // });
-        // const blobCid = uploadResult.cid; // Assuming result has a CID
-        const blobCid = `fake-cid-${fetchedBlob.versionedHash}-${Date.now()}`;
+        logger.info(`[BlobArchiver] Attempting to upload BlobContainer for ${fetchedBlob.versionedHash} as ${autoDriveFileName}`);
 
-        logger.info(`[BlobArchiver:TODO] Placeholder: BlobContainer for ${fetchedBlob.versionedHash} stored. CID: ${blobCid}`);
+        currentBlobCid = await drive.uploadObjectAsJSON(blobContainer, autoDriveFileName, {
+           compression: true,
+        });
+
+        if (!currentBlobCid || typeof currentBlobCid !== 'string') {
+          throw new Error('AutoDrive upload did not return a valid CID string.');
+        }
+
+        logger.info(`[BlobArchiver] Successfully uploaded BlobContainer for ${fetchedBlob.versionedHash}. CID: ${currentBlobCid}`);
         
         blobArchivalDetails.push({
           versionedHash: fetchedBlob.versionedHash,
-          blobCid: blobCid,
-          // blobContainerSha256: blobContainerSha256, // If we want to store this for extra verification
+          blobCid: currentBlobCid,
           success: true,
         });
+
       } catch (error: any) {
         overallSuccess = false;
-        const errorMessage = `Failed to prepare or archive blob ${fetchedBlob.versionedHash} for tx ${jobData.transactionHash}: ${error.message}`;
-        logger.error(`[BlobArchiver] ${errorMessage}`, { error, stack: error.stack });
-        blobArchivalDetails.push({
+        const errorMessage = `Failed to archive blob ${fetchedBlob.versionedHash} for tx ${jobData.transactionHash}: ${error.message}`;
+        logger.error(`[BlobArchiver] ${errorMessage}`, { error, stack: error.stack, blobCid: currentBlobCid });
+        
+        const errorDetail: any = {
           versionedHash: fetchedBlob.versionedHash,
           success: false,
           error: errorMessage,
-        });
+        };
+        if (currentBlobCid) { // Only add blobCid to the error detail if it was obtained before the error
+          errorDetail.blobCid = currentBlobCid;
+        }
+        blobArchivalDetails.push(errorDetail);
       }
     }
 
     return {
       transactionHash: jobData.transactionHash,
       success: overallSuccess,
-      message: overallSuccess ? 'All fetched blobs processed for archival.' : 'Some blobs failed to archive.',
+      message: overallSuccess ? 'All blobs processed for archival.' : 'Some blobs failed to archive.',
       blobArchivalDetails,
     };
   };
