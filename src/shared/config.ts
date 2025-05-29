@@ -41,6 +41,9 @@ const configSchema = z.object({
   // Logging
   logging: z.object({
     level: z.enum(['debug', 'info', 'warn', 'error']),
+    filePath: z.string().optional(),
+    maxSizeMB: z.number().positive().optional(),
+    maxFiles: z.number().int().positive().optional()
   }),
 })
 
@@ -91,7 +94,10 @@ export const loadConfig = (): Config => {
       host: process.env['HOST'] || '0.0.0.0',
     },
     logging: {
-      level: process.env['LOG_LEVEL'] || 'debug',
+      level: process.env['LOG_LEVEL'] || 'info',
+      filePath: process.env['LOG_FILE_PATH'] || './logs/app.log',
+      maxSizeMB: parseEnvNumber(process.env['LOG_MAX_SIZE_MB'], 50),
+      maxFiles: parseEnvNumber(process.env['LOG_MAX_FILES'], 5)
     },
   }
   
