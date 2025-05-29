@@ -69,10 +69,10 @@ PGLITE_PATH=./data/blobs.db   # Local database file
 
 # Ethereum Configuration  
 ETH_RPC_URL=                  # Your Ethereum RPC endpoint
-BASE_CONTRACTS=0x49048044D57e1C92A77f79988d21Fa8fAF74E97e  # Base L2 contracts
+BASE_CONTRACTS=0x49048044D57e1C92A77f79988d21Fa8fAF74E97e,0xff00000000000000000000000000000000008453  # Base L2 contracts
 CONFIRMATIONS=3               # Blocks to wait before processing
 BATCH_SIZE=10                 # Blocks to process in parallel
-START_BLOCK=                  # Optional: specific block to start from
+START_BLOCK=22590930          # Optional: specific block to start from (contains Base blobs)
 
 # Auto Drive
 AUTO_DRIVE_API_KEY=           # Your API key from ai3.storage
