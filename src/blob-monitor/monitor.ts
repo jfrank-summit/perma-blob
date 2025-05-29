@@ -28,66 +28,34 @@ export const createMonitorState = async (
   }
 }
 
-export const startMonitor = async (
-  config: MonitorConfig,
+const processBlockNumber = async (
   state: MonitorState,
-  db: Database,
+  config: MonitorConfig,
+  blockNumber: bigint,
   onBlobFound: (blob: ProcessingJob) => Promise<void>
-): Promise<() => void> => {
-  const updatedState = { ...state, isRunning: true }
-  const stateRepo = createMonitorStateRepository(db)
-  
-  // Start monitoring loop
-  const abortController = new AbortController()
-  
-  const monitorLoop = async () => {
-    while (!abortController.signal.aborted) {
-      try {
-        const latestBlock = await updatedState.client.getBlockNumber()
-        const targetBlock = latestBlock - BigInt(config.confirmations || 3)
-        
-        if (updatedState.lastProcessedBlock < targetBlock) {
-          const fromBlock = updatedState.lastProcessedBlock + 1n
-          const maxBlocks = fromBlock + 99n
-          const toBlock = maxBlocks < targetBlock ? maxBlocks : targetBlock // Limit range to 100 blocks
-          
-          logger.info(`Processing blocks ${fromBlock} to ${toBlock} (latest: ${latestBlock})`)
-          
-          const processedBlock = await processBlockRange(
-            updatedState,
-            config,
-            fromBlock,
-            toBlock,
-            onBlobFound
-          )
-          
-          // Update state immutably
-          updatedState.lastProcessedBlock = processedBlock
-          await stateRepo.updateLastProcessedBlock(processedBlock)
-          
-          logger.info(`Completed processing up to block ${processedBlock}`)
-        } else {
-          logger.debug(`Waiting for new blocks... (current: ${updatedState.lastProcessedBlock}, target: ${targetBlock})`)
-        }
-        
-        // Wait for next block
-        await sleep(12000, abortController.signal)
-      } catch (error) {
-        if (!abortController.signal.aborted) {
-          logger.error('Monitor loop error:', error)
-          await sleep(5000, abortController.signal)
-        }
-      }
+): Promise<void> => {
+  try {
+    const block = await state.client.getBlock({
+      blockNumber,
+      includeTransactions: true
+    })
+    
+    const blobTxs = await processBlock(block, config.baseContracts)
+    
+    // Queue blob processing jobs
+    for (const tx of blobTxs) {
+      await onBlobFound({
+        txHash: tx.hash,
+        blockNumber: tx.blockNumber,
+        blockHash: tx.blockHash,
+        timestamp: tx.timestamp,
+        blobVersionedHashes: tx.blobVersionedHashes,
+        from: tx.from
+      })
     }
-  }
-  
-  monitorLoop()
-  logger.info('Blob monitor started')
-  
-  // Return stop function
-  return () => {
-    logger.info('Stopping blob monitor...')
-    abortController.abort()
+  } catch (error) {
+    logger.error(`Error processing block ${blockNumber}:`, error)
+    throw error
   }
 }
 
@@ -135,37 +103,6 @@ const processBlockRange = async (
   return toBlock
 }
 
-const processBlockNumber = async (
-  state: MonitorState,
-  config: MonitorConfig,
-  blockNumber: bigint,
-  onBlobFound: (blob: ProcessingJob) => Promise<void>
-): Promise<void> => {
-  try {
-    const block = await state.client.getBlock({
-      blockNumber,
-      includeTransactions: true
-    })
-    
-    const blobTxs = await processBlock(block, config.baseContracts)
-    
-    // Queue blob processing jobs
-    for (const tx of blobTxs) {
-      await onBlobFound({
-        txHash: tx.hash,
-        blockNumber: tx.blockNumber,
-        blockHash: tx.blockHash,
-        timestamp: tx.timestamp,
-        blobVersionedHashes: tx.blobVersionedHashes,
-        from: tx.from
-      })
-    }
-  } catch (error) {
-    logger.error(`Error processing block ${blockNumber}:`, error)
-    throw error
-  }
-}
-
 const sleep = (ms: number, signal?: AbortSignal): Promise<void> => 
   new Promise((resolve) => {
     const timeout = setTimeout(resolve, ms)
@@ -173,4 +110,66 @@ const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
       clearTimeout(timeout)
       resolve()
     })
-  }) 
+  })
+
+export const startMonitor = async (
+  config: MonitorConfig,
+  state: MonitorState,
+  db: Database,
+  onBlobFound: (blob: ProcessingJob) => Promise<void>
+): Promise<() => void> => {
+  let currentState = { ...state, isRunning: true }
+  const stateRepo = createMonitorStateRepository(db)
+  
+  // Start monitoring loop
+  const abortController = new AbortController()
+  
+  const monitorLoop = async () => {
+    while (!abortController.signal.aborted) {
+      try {
+        const latestBlock = await currentState.client.getBlockNumber()
+        const targetBlock = latestBlock - BigInt(config.confirmations || 3)
+        
+        if (currentState.lastProcessedBlock < targetBlock) {
+          const fromBlock = currentState.lastProcessedBlock + 1n
+          const maxBlocks = fromBlock + 99n
+          const toBlock = maxBlocks < targetBlock ? maxBlocks : targetBlock // Limit range to 100 blocks
+          
+          logger.info(`Processing blocks ${fromBlock} to ${toBlock} (latest: ${latestBlock})`)
+          
+          const processedBlock = await processBlockRange(
+            currentState,
+            config,
+            fromBlock,
+            toBlock,
+            onBlobFound
+          )
+          
+          currentState = { ...currentState, lastProcessedBlock: processedBlock }
+          await stateRepo.updateLastProcessedBlock(processedBlock)
+          
+          logger.info(`Completed processing up to block ${processedBlock}`)
+        } else {
+          logger.debug(`Waiting for new blocks... (current: ${currentState.lastProcessedBlock}, target: ${targetBlock})`)
+        }
+        
+        // Wait for next block
+        await sleep(12000, abortController.signal)
+      } catch (error) {
+        if (!abortController.signal.aborted) {
+          logger.error('Monitor loop error:', error)
+          await sleep(5000, abortController.signal)
+        }
+      }
+    }
+  }
+  
+  monitorLoop()
+  logger.info('Blob monitor started')
+  
+  // Return stop function
+  return () => {
+    logger.info('Stopping blob monitor...')
+    abortController.abort()
+  }
+} 
