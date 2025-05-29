@@ -1,15 +1,24 @@
 # Ethereum L2 Blob Archival System
 
-A functional TypeScript system that archives Ethereum L2 blob data to the Autonomys Network, addressing the upcoming EIP-4444 changes where Ethereum nodes will only store recent history.
+A functional TypeScript system that archives Ethereum L2 blob data to the Autonomys Network, preserving EIP-4844 blob transactions before they expire.
 
 ## Overview
 
-This system monitors Base L2 blob submissions on Ethereum L1 and permanently archives them to the Autonomys Network using the Auto Drive SDK. It provides:
+This system monitors Base L2's EIP-4844 blob transactions on Ethereum L1 and permanently archives them to the Autonomys Network. EIP-4844 blobs are only available for ~18 days (4096 epochs) before they expire and are pruned from the network.
 
-- **Automatic monitoring** of Base L2 blob transactions on Ethereum L1
-- **Permanent archival** to the decentralized Autonomys Network
+Key features:
+- **Monitors EIP-4844 blob transactions** submitted by Base L2 to Ethereum L1
+- **Permanent archival** to the Autonomys Network's Distributed Storage Network (DSN) before blob expiry (~18 days)
+- **Preserves layer 2 transaction data** that may otherwise be lost after blob expiry
 - **Easy retrieval** of archived blobs via CID
 - **Data integrity** verification and metrics tracking
+
+## Background
+
+- **EIP-4844 (Proto-Danksharding)**: Introduced blob transactions that allow L2s like Base to post data to Ethereum L1 more efficiently
+- **Blob Expiry**: Blobs are only stored for ~18 days (4096 epochs) on Ethereum nodes before being pruned
+- **The Problem**: After blob expiry, L2 transaction data becomes inaccessible unless archived elsewhere
+- **Our Solution**: Automatically detect and archive L2 blob data to Autonomys Network for permanent storage
 
 ## Prerequisites
 
@@ -102,7 +111,7 @@ src/
 │   ├── create-database.ts
 │   ├── migrations.ts  # Schema migrations
 │   └── repositories/  # Data access patterns
-├── blob-monitor/      # Ethereum L1 monitoring
+├── blob-monitor/      # Ethereum L1 monitoring for EIP-4844 txs
 ├── blob-fetcher/      # Blob data retrieval
 ├── blob-archiver/     # Auto Drive upload
 ├── blob-retriever/    # Blob download/verification
@@ -139,21 +148,33 @@ DATABASE_TYPE=postgres
 DATABASE_URL=postgresql://user:password@host:5432/database
 ```
 
-## Architecture
-
-The system follows functional programming principles:
-- No classes, only pure functions
-- Immutable data structures
-- Explicit dependency injection
-- Strong TypeScript typing
-
 ### Components
 
-1. **Base Monitor**: Scans Ethereum L1 for Base L2 blob transactions
-2. **Blob Fetcher**: Retrieves blob data from L1 
+1. **Base Monitor**: Scans Ethereum L1 for Base L2's EIP-4844 blob transactions
+2. **Blob Fetcher**: Retrieves blob data from L1 beacon chain before expiry
 3. **Blob Archiver**: Uploads blobs to Autonomys Network
 4. **Blob Retriever**: Downloads and verifies archived blobs
 5. **Database**: Tracks processing state and blob metadata
+
+## How It Works
+
+1. **Detection**: Monitor watches Ethereum L1 for transactions from Base L2 contracts that include blob data (type 0x03/EIP-4844)
+2. **Fetching**: When detected, the blob data is fetched from the Ethereum beacon chain
+3. **Archival**: Blob data is packaged with metadata and uploaded to Autonomys Network via Auto Drive
+4. **Indexing**: CIDs and metadata are stored in the database for easy retrieval
+5. **Verification**: Archived blobs can be retrieved and verified against their original KZG commitments
+
+## Why Archive Blobs?
+
+EIP-4844 blobs are designed to be temporary - they expire after ~18 days to keep Ethereum node requirements manageable. However, this data represents important L2 transaction history that may be needed for:
+
+- Historical analysis and auditing
+- Regulatory compliance
+- User transaction proofs
+- L2 state reconstruction
+- Research and analytics
+
+By archiving to Autonomys Network, we ensure this data remains permanently accessible.
 
 ## Production Deployment
 
@@ -164,15 +185,6 @@ For production deployment:
 3. Configure proper RPC endpoints with rate limiting
 4. Use environment-specific `.env` files
 5. Set up monitoring and alerting
-
-## Contributing
-
-This project follows functional programming principles. Please ensure:
-- All functions are pure where possible
-- No classes or OOP patterns
-- Immutable data structures
-- Comprehensive TypeScript types
-- Tests for critical functions
 
 ## License
 
