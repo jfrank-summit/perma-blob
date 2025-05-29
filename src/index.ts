@@ -6,6 +6,7 @@ import { logger } from './shared/logger.js'
 import { createMonitorState, startMonitor } from './blob-monitor/index.js'
 import type { ProcessingJob, MonitorConfig } from './blob-monitor/index.js'
 import { createBlobFetcherWorker } from './blob-fetcher/index.js'
+import { createBlobArchiverWorker } from './blob-archiver/index.js'
 import Redis from 'ioredis'
 
 const BLOB_FETCH_QUEUE_KEY = 'blob_fetch_jobs_queue'
@@ -14,6 +15,7 @@ const main = async () => {
   logger.info('Starting Ethereum L2 Blob Archival System...')
   
   let fetcherWorker: Awaited<ReturnType<typeof createBlobFetcherWorker>> | null = null
+  let archiverWorker: Awaited<ReturnType<typeof createBlobArchiverWorker>> | null = null
   let redisClient: Redis | null = null
 
   try {
@@ -51,12 +53,17 @@ const main = async () => {
     fetcherWorker = await createBlobFetcherWorker(config)
     fetcherWorker.start()
     
+    // Initialize and start Blob Archiver Worker
+    archiverWorker = await createBlobArchiverWorker(config)
+    archiverWorker.start()
+    
     // Initialize monitor
     const monitorConfig: MonitorConfig = {
       rpcUrl: config.ethereum.rpcUrl,
-      baseContracts: config.ethereum.baseContracts,
+      baseContracts: config.ethereum.baseContracts.map(addr => addr as `0x${string}`),
       confirmations: config.ethereum.confirmations,
       batchSize: config.ethereum.batchSize,
+      l2Source: 'base',
       ...(config.ethereum.startBlock !== undefined && { startBlock: config.ethereum.startBlock })
     }
     
@@ -100,6 +107,9 @@ const main = async () => {
       if (fetcherWorker) {
         await fetcherWorker.stop()
       }
+      if (archiverWorker) {
+        await archiverWorker.stop()
+      }
       if (redisClient) {
         await redisClient.quit()
         logger.info('[Main] Redis client (for publishing) disconnected.')
@@ -115,6 +125,7 @@ const main = async () => {
   } catch (error) {
     logger.error('Failed to start system:', error)
     if (fetcherWorker) await fetcherWorker.stop().catch(e => logger.error('Error stopping fetcher worker during main catch:', e))
+    if (archiverWorker) await archiverWorker.stop().catch(e => logger.error('Error stopping archiver worker during main catch:', e))
     if (redisClient) await redisClient.quit().catch(e => logger.error('Error stopping main Redis client during main catch:', e))
     process.exit(1)
   }
