@@ -3,7 +3,7 @@ import { mainnet } from 'viem/chains'
 import type { MonitorConfig, MonitorState, ProcessingJob } from './types.js'
 import type { Database } from '../database/types.js'
 import { createMonitorStateRepository } from '../database/repositories/monitor-state.js'
-import { processBlock } from './block-processor.js'
+import { createProcessingJobsForBlock } from './block-processor.js'
 import { logger } from '../shared/logger.js'
 
 export const createMonitorState = async (
@@ -24,7 +24,8 @@ export const createMonitorState = async (
   return {
     isRunning: false,
     lastProcessedBlock: config.startBlock ?? lastProcessedBlock,
-    client
+    client,
+    monitorId: 'default-monitor'
   }
 }
 
@@ -32,7 +33,7 @@ const processBlockNumber = async (
   state: MonitorState,
   config: MonitorConfig,
   blockNumber: bigint,
-  onBlobFound: (blob: ProcessingJob) => Promise<void>
+  onBlobFound: (job: ProcessingJob) => Promise<void>
 ): Promise<void> => {
   try {
     const block = await state.client.getBlock({
@@ -40,18 +41,13 @@ const processBlockNumber = async (
       includeTransactions: true
     })
     
-    const blobTxs = await processBlock(block, config.baseContracts)
+    const jobs = await createProcessingJobsForBlock(block, {
+      baseContracts: config.baseContracts,
+      l2Source: config.l2Source 
+    });
     
-    // Queue blob processing jobs
-    for (const tx of blobTxs) {
-      await onBlobFound({
-        txHash: tx.hash,
-        blockNumber: tx.blockNumber,
-        blockHash: tx.blockHash,
-        timestamp: tx.timestamp,
-        blobVersionedHashes: tx.blobVersionedHashes,
-        from: tx.from
-      })
+    for (const job of jobs) {
+      await onBlobFound(job)
     }
   } catch (error) {
     logger.error(`Error processing block ${blockNumber}:`, error)
