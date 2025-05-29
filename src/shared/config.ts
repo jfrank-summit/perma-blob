@@ -76,7 +76,7 @@ export const loadConfig = (): Config => {
       rpcUrl: process.env['ETH_RPC_URL'] || '',
       baseContracts: parseEnvArray(process.env['BASE_CONTRACTS']),
       confirmations: parseEnvNumber(process.env['CONFIRMATIONS'], 3),
-      batchSize: parseEnvNumber(process.env['BATCH_SIZE'], 10),
+      batchSize: parseEnvNumber(process.env['BATCH_SIZE'], 5),
       startBlock: parseEnvBigInt(process.env['START_BLOCK']),
     },
     autoDrive: {
@@ -91,7 +91,7 @@ export const loadConfig = (): Config => {
       host: process.env['HOST'] || '0.0.0.0',
     },
     logging: {
-      level: process.env['LOG_LEVEL'] || 'info',
+      level: process.env['LOG_LEVEL'] || 'debug',
     },
   }
   

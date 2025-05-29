@@ -1,18 +1,21 @@
 import { createDatabase } from './database/create-database.js'
 import { createMonitorStateRepository } from './database/repositories/monitor-state.js'
-import { createArchivedBlobsRepository } from './database/repositories/archived-blobs.js'
+// import { createArchivedBlobsRepository } from './database/repositories/archived-blobs.js'
 import { loadConfig } from './shared/config.js'
+import { logger } from './shared/logger.js'
+import { createMonitorState, startMonitor } from './blob-monitor/index.js'
+import type { ProcessingJob, MonitorConfig } from './blob-monitor/index.js'
 
 const main = async () => {
-  console.log('Starting Ethereum L2 Blob Archival System...')
+  logger.info('Starting Ethereum L2 Blob Archival System...')
   
   try {
     // Load configuration
     const config = loadConfig()
-    console.log('Configuration loaded successfully')
+    logger.info('Configuration loaded successfully')
     
     // Initialize database
-    console.log(`Initializing ${config.database.type} database...`)
+    logger.info(`Initializing ${config.database.type} database...`)
     const dbConfig = config.database.type === 'pglite' 
       ? { type: 'pglite' as const, pglitePath: config.database.pglitePath || './data/blobs.db' }
       : { type: 'postgres' as const, postgresUrl: config.database.postgresUrl || '' }
@@ -20,39 +23,70 @@ const main = async () => {
     const db = await createDatabase(dbConfig)
     
     // Run migrations
-    console.log('Running database migrations...')
+    logger.info('Running database migrations...')
     await db.migrate()
     
     // Create repositories
     const monitorState = createMonitorStateRepository(db)
-    const archivedBlobs = createArchivedBlobsRepository(db)
+    // TODO: Use archivedBlobs repository when implementing archival
+    // const archivedBlobs = createArchivedBlobsRepository(db)
     
     // Test database connection
     const lastBlock = await monitorState.getLastProcessedBlock()
-    console.log(`Last processed block: ${lastBlock}`)
+    logger.info(`Last processed block: ${lastBlock}`)
     
-    // TODO: Initialize components
-    console.log('System initialization complete!')
-    console.log('Ready to start monitoring and archiving blobs...')
+    // Initialize monitor
+    const monitorConfig: MonitorConfig = {
+      rpcUrl: config.ethereum.rpcUrl,
+      baseContracts: config.ethereum.baseContracts,
+      confirmations: config.ethereum.confirmations,
+      batchSize: config.ethereum.batchSize,
+      ...(config.ethereum.startBlock !== undefined && { startBlock: config.ethereum.startBlock })
+    }
+    
+    const monitor = await createMonitorState(monitorConfig, db)
+    
+    // Define blob processing handler
+    const handleBlobFound = async (job: ProcessingJob) => {
+      logger.info(`New blob transaction found: ${job.txHash}`, {
+        blockNumber: job.blockNumber.toString(),
+        blobCount: job.blobVersionedHashes.length
+      })
+      
+      // TODO: Queue job for blob fetching and archival
+      // For now, just log it
+    }
+    
+    // Start monitoring
+    const stopMonitor = await startMonitor(
+      monitorConfig,
+      monitor,
+      db,
+      handleBlobFound
+    )
+    
+    logger.info('System initialization complete!')
+    logger.info('Monitoring for Base L2 blob transactions...')
     
     // Handle shutdown
-    process.on('SIGINT', async () => {
-      console.log('\nShutting down gracefully...')
+    const shutdown = async () => {
+      logger.info('Shutting down gracefully...')
+      stopMonitor()
       await db.close()
       process.exit(0)
-    })
+    }
     
-    process.on('SIGTERM', async () => {
-      console.log('\nShutting down gracefully...')
-      await db.close()
-      process.exit(0)
-    })
+    process.on('SIGINT', shutdown)
+    process.on('SIGTERM', shutdown)
     
   } catch (error) {
-    console.error('Failed to start system:', error)
+    logger.error('Failed to start system:', error)
     process.exit(1)
   }
 }
 
 // Run the main function
-main().catch(console.error) 
+main().catch((error) => {
+  logger.error('Unhandled error:', error)
+  process.exit(1)
+}) 

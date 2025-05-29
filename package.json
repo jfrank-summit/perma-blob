@@ -32,13 +32,17 @@
     "@autonomys/auto-utils": "^1.4.35",
     "@electric-sql/pglite": "^0.3.2",
     "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "lru-cache": "^11.1.0",
     "tsup": "^8.5.0",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",
     "viem": "^2.30.5",
+    "winston": "^3.17.0",
     "zod": "^3.25.36"
   },
   "devDependencies": {
+    "@types/express": "^5.0.2",
     "@types/node": "^20.10.4",
     "@types/pg": "^8.15.2",
     "@typescript-eslint/eslint-plugin": "^8.33.0",
