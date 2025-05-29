@@ -45,6 +45,12 @@ const configSchema = z.object({
     maxSizeMB: z.number().positive().optional(),
     maxFiles: z.number().int().positive().optional()
   }),
+
+  // Blob Fetcher
+  blobFetcher: z.object({
+    retryCount: z.number().int().positive(),
+    retryDelayMs: z.number().int().positive(),
+  }).optional(),
 })
 
 export type Config = z.infer<typeof configSchema>
@@ -98,6 +104,10 @@ export const loadConfig = (): Config => {
       filePath: process.env['LOG_FILE_PATH'] || './logs/app.log',
       maxSizeMB: parseEnvNumber(process.env['LOG_MAX_SIZE_MB'], 50),
       maxFiles: parseEnvNumber(process.env['LOG_MAX_FILES'], 5)
+    },
+    blobFetcher: {
+      retryCount: parseEnvNumber(process.env['BLOB_FETCHER_RETRY_COUNT'], 3),
+      retryDelayMs: parseEnvNumber(process.env['BLOB_FETCHER_RETRY_DELAY_MS'], 2000),
     },
   }
   
