@@ -15,10 +15,11 @@ const configSchema = z.object({
   // Ethereum
   ethereum: z.object({
     rpcUrl: z.string().url(),
+    beaconApiUrl: z.string().url().optional(),
     baseContracts: z.array(z.string()),
     confirmations: z.number().int().positive(),
     batchSize: z.number().int().positive(),
-    startBlock: z.bigint().optional(),
+    startBlock: z.bigint().nonnegative(),
     l2Source: z.string(),
   }),
   
@@ -62,23 +63,9 @@ const configSchema = z.object({
 
 export type Config = z.infer<typeof configSchema>
 
-const parseEnvArray = (value: string | undefined): string[] => {
-  if (!value) return []
-  return value.split(',').map(s => s.trim()).filter(Boolean)
-}
-
 const parseEnvNumber = (value: string | undefined, defaultValue: number): number => {
   const parsed = parseInt(value || '', 10)
   return isNaN(parsed) ? defaultValue : parsed
-}
-
-const parseEnvBigInt = (value: string | undefined): bigint | undefined => {
-  if (!value) return undefined
-  try {
-    return BigInt(value)
-  } catch {
-    return undefined
-  }
 }
 
 // Helper function for parsing boolean environment variables
@@ -88,18 +75,28 @@ const parseEnvBoolean = (value: string | undefined, defaultValue: boolean): bool
 };
 
 export const loadConfig = (): Config => {
+  dotenv.config();
+
+  const ethereumRpcUrl = process.env['ETH_RPC_URL'];
+  if (!ethereumRpcUrl) {
+    throw new Error('ETH_RPC_URL is not set in the environment variables.');
+  }
+
+  const beaconApiUrl = process.env['BEACON_API_URL'];
+
   const rawConfig = {
     database: {
       type: process.env['DATABASE_TYPE'] || 'pglite',
-      pglitePath: process.env['PGLITE_PATH'],
-      postgresUrl: process.env['DATABASE_URL'],
+      pglitePath: process.env['PGLITE_PATH'] || './data/blobs.db',
+      postgresUrl: process.env['POSTGRES_URL'],
     },
     ethereum: {
-      rpcUrl: process.env['ETH_RPC_URL'] || '',
-      baseContracts: parseEnvArray(process.env['BASE_CONTRACTS']),
-      confirmations: parseEnvNumber(process.env['CONFIRMATIONS'], 3),
-      batchSize: parseEnvNumber(process.env['BATCH_SIZE'], 5),
-      startBlock: parseEnvBigInt(process.env['START_BLOCK']),
+      rpcUrl: ethereumRpcUrl,
+      beaconApiUrl: beaconApiUrl,
+      baseContracts: process.env['BASE_CONTRACTS'] ? process.env['BASE_CONTRACTS'].split(',') : [],
+      confirmations: process.env['CONFIRMATIONS'] ? parseInt(process.env['CONFIRMATIONS'], 10) : 3,
+      batchSize: process.env['BATCH_SIZE'] ? parseInt(process.env['BATCH_SIZE'], 10) : 10,
+      startBlock: process.env['START_BLOCK'] ? BigInt(process.env['START_BLOCK']) : 0,
       l2Source: process.env['L2_SOURCE'] || 'base',
     },
     autoDrive: {
