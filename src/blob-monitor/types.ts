@@ -2,11 +2,11 @@ import type { PublicClient, Hash, Address, Log } from 'viem'
 
 export type MonitorConfig = {
   rpcUrl: string
-  rpcRateLimit?: number
-  startBlock?: bigint
+  beaconApiUrl?: string; // Optional: if monitor needs to interact with Beacon API directly
+  baseContracts: Address[]
   confirmations: number
   batchSize: number
-  baseContracts: Address[]
+  blocksFromHead?: number // Optional: How many blocks from head to start if no last processed block
   l2Source: string
 }
 
@@ -32,6 +32,7 @@ export type ProcessingJob = {
   timestamp: bigint
   txHash: Hash
   from: Address
+  to: Address
   blobVersionedHashes: Hash[]
   l2Source: string
 }

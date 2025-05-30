@@ -11,11 +11,16 @@ export type FetchedTransactionBlobs = {
   // Context from the input ProcessingJob
   transactionHash: string;
   blockNumber: bigint;
-  blockHash: string;
+  blockHash: string; // Execution Layer Block Hash
   timestamp: bigint;
   from: string;
+  to: string; // Added
   l2Source: string; // Identifier for the L2 source, carried from ProcessingJob
   expectedBlobVersionedHashes: string[]; // The original list from ProcessingJob
+
+  // Data derived/fetched by the fetcher
+  slot: string; // Added - Slot number used for Beacon API call
+  blockRootHash?: string; // Added - Beacon chain block root, fetched from headers endpoint
 
   // Actual fetched data
   fetchedBlobs: FetchedBlob[]; // Array of blobs successfully fetched and validated for this transaction

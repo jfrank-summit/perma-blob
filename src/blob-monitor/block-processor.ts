@@ -60,6 +60,7 @@ export const createProcessingJobsForBlock = async (
       timestamp: block.timestamp,
       txHash: tx.hash,
       from: tx.from,
+      to: tx.to,
       blobVersionedHashes: tx.blobVersionedHashes,
       l2Source: monitorConfig.l2Source,
     }))

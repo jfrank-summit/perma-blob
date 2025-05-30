@@ -15,17 +15,25 @@ export type BlobArchiverConfig = {
 
 // Structure of the object to be stored in AutoDrive for each blob
 export type BlobContainer = {
-  version: "1.0";
-  type: "ethereum-l2-blob";
+  version: string;
+  type: string;
   metadata: {
-    blobHash: string;                // Original L1 blob hash (versioned hash from KZG commitment)
-    l2Source: string;               // Source L2 (e.g., "base")
-    l1BlockNumber: number;          // L1 block containing this blob
-    l1BlockHash: string;            // L1 block hash
-    blobIndex: number;              // Index within the L1 transaction's blobs
-    timestamp: number;              // L1 block timestamp
-    sizeBytes: number;                   // Blob size in bytes
-    txHash: string;                 // L1 transaction hash containing blob
+    // L1 transaction data
+    txHash: string;
+    from: string; 
+    to: string;   
+    l1BlockNumber: number;
+    l1BlockHash: string; // Execution Layer Block Hash
+    slot: string; 
+    l1BlockRootHash?: string; // Optional: Beacon chain block root
+
+    // Blob specific data
+    blobHash: string; // Versioned hash
+    blobIndex: number;
+    sizeBytes: number;
+    
+    // L2 source info
+    l2Source: string;
   };
   blob: string;                     // Base64 encoded blob data
   checksums: {

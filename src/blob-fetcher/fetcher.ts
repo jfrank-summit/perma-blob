@@ -68,14 +68,36 @@ export const createBlobFetcher = (
       
       slotNumber = MERGE_SLOT + (block.timestamp - MERGE_TIMESTAMP) / SECONDS_PER_SLOT;
       logger.debug(`[BlobFetcher] Calculated slot ${slotNumber} for block ${job.blockNumber} (timestamp: ${block.timestamp})`);
+      
+      // Try to fetch the block root hash from beacon API headers endpoint
+      try {
+        const baseBeaconUrl = appConfig.ethereum.beaconApiUrl || appConfig.ethereum.rpcUrl;
+        const MUNGED_API_URL = baseBeaconUrl.endsWith('/') ? baseBeaconUrl : `${baseBeaconUrl}/`;
+        const headerUrl = `${MUNGED_API_URL}eth/v1/beacon/headers/${slotNumber}`;
+        
+        const headerResponse = await fetch(headerUrl, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' }
+        });
+        
+        if (headerResponse.ok) {
+          const headerData = await headerResponse.json() as any;
+          if (headerData.data && headerData.data.root) {
+            blockRootHashFromHeader = headerData.data.root;
+            logger.debug(`[BlobFetcher] Got block root hash ${blockRootHashFromHeader} for slot ${slotNumber} from headers endpoint`);
+          }
+        } else {
+          logger.warn(`[BlobFetcher] Failed to fetch headers for slot ${slotNumber}. Status: ${headerResponse.status}`);
+        }
+      } catch (e) {
+        logger.warn(`[BlobFetcher] Could not fetch block root hash for slot ${slotNumber} from headers endpoint: ${e}`);
+      }
     } catch (e: any) {
       const errorMessage = `[BlobFetcher] Failed to calculate slot for block ${job.blockNumber}: ${e.message}`;
       logger.error(errorMessage);
       return Err(new Error(errorMessage));
     }
 
-    const blockHashHex = job.blockHash.startsWith('0x') ? job.blockHash as Hex : `0x${job.blockHash}` as Hex;
-    
     // Use dedicated Beacon API URL if available, otherwise append to Execution RPC URL
     const baseBeaconUrl = appConfig.ethereum.beaconApiUrl || appConfig.ethereum.rpcUrl;
     
@@ -187,14 +209,17 @@ export const createBlobFetcher = (
       errorsEncountered.push(warningMessage);
     }
 
-    const resultData: FetchedTransactionBlobs = {
+    const result: FetchedTransactionBlobs = {
       transactionHash: job.txHash,
       blockNumber: job.blockNumber,
       blockHash: job.blockHash,
       timestamp: job.timestamp,
       from: job.from,
+      to: job.to,
       l2Source: job.l2Source,
       expectedBlobVersionedHashes: job.blobVersionedHashes,
+      slot: slotNumber.toString(),
+      ...(blockRootHashFromHeader && { blockRootHash: blockRootHashFromHeader }),
       fetchedBlobs: fetchedBlobsForTx,
       allBlobsFound: allExpectedBlobsFound,
       ...(errorsEncountered.length > 0 && { errors: errorsEncountered }),
@@ -206,7 +231,7 @@ export const createBlobFetcher = (
       logger.warn(`[BlobFetcher] No relevant blobs found for tx: ${job.txHash} (block: ${job.blockNumber}) despite expecting ${job.blobVersionedHashes.length}. Result indicates allBlobsFound: ${allExpectedBlobsFound}.`);
     }
     
-    return Ok(resultData);
+    return Ok(result);
   };
 
   return {
