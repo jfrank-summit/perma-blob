@@ -49,13 +49,19 @@ export const createBlobFetcherWorker = async (config: Config) => {
         logger.info(`[BlobFetcherWorker] Successfully fetched ${fetchedData.fetchedBlobs.length} blobs for tx: ${job.txHash}. Enqueueing for archival.`);
         await redisClient.lpush(BLOB_ARCHIVE_QUEUE_KEY, JSON.stringify(fetchedData, bigIntReplacer));
       } else {
-        logger.error(`[BlobFetcherWorker] Failed to fetch blobs for tx: ${job.txHash}. Error: ${fetchResult.error.message}`, { job });
-        // TODO: Implement dead-letter queue or other error handling for persistent fetch failures
-        // For now, we just log the error and don't requeue automatically.
+        logger.error('[BlobFetcherWorker] Failed to fetch blobs, not enqueuing for archival:', 
+          JSON.parse(JSON.stringify({ 
+            error: fetchResult.error.message, 
+            txHash: job.txHash,
+            blockHash: job.blockHash,
+          }, bigIntReplacer))
+        );
       }
-    } catch (error: any) {
-      logger.error('[BlobFetcherWorker] Error processing job string or during fetch operation:', { error: error.message, jobString, stack: error.stack });
-      // Handle potential JSON parse errors or unexpected issues in fetchBlobsForJob not returning a Result
+    } catch (err: any) {
+      logger.error(
+        '[BlobFetcherWorker] Error processing job string or during fetch operation:',
+        JSON.parse(JSON.stringify({ error: err.message, jobString, stack: err.stack }, bigIntReplacer))
+      );
     }
   };
 

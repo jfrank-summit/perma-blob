@@ -5,6 +5,8 @@ import type { FetchedTransactionBlobs, FetchedBlob, BlobFetcherConfig, RpcBlobSi
 import type { Config } from '../shared/config.js';
 import { logger } from '../shared/logger.js';
 import { type Result, Ok, Err } from '../shared/result.js';
+import fetch from 'node-fetch'; // Import node-fetch
+import { bigIntReplacer } from '../shared/json-utils.js'; // Import the replacer
 
 const defaultFetcherConfigValues: BlobFetcherConfig = {
   retryCount: 3,
@@ -14,13 +16,21 @@ const defaultFetcherConfigValues: BlobFetcherConfig = {
 // Helper function for sleep
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
-// Define the expected RPC response structure for eth_getBlobSidecars
-// Based on EIP-4844, it should return an array of sidecar objects.
-// Each sidecar object includes blob, kzgCommitment, kzgProof.
-// We need to ensure our RpcBlobSidecar type matches what the RPC actually returns.
-// Viem's `BlobSidecar` type might be useful here if it exists and matches.
-// For now, RpcBlobSidecar is defined in ./types.ts
-type EthGetBlobSidecarsRpcResponse = RpcBlobSidecar[];
+// Define the expected structure from the Beacon API /eth/v1/beacon/blob_sidecars/{block_id}
+type BeaconApiBlobSidecar = {
+  index: string; // Index of the sidecar
+  blob: Hex;     // The blob of data associated with the sidecar
+  kzg_commitment: Hex; // The KZG commitment for the data
+  kzg_proof: Hex;      // The KZG proof for the data
+  // The API might return more fields, but these are the core ones matching RpcBlobSidecar
+};
+
+type BeaconApiGetBlobSidecarsResponse = {
+  version: string;
+  execution_optimistic: boolean;
+  finalized: boolean;
+  data: BeaconApiBlobSidecar[];
+};
 
 export const createBlobFetcher = (
   appConfig: Config, // Global app config
@@ -34,84 +44,118 @@ export const createBlobFetcher = (
   const fetchBlobsForJob = async (
     job: ProcessingJob
   ): Promise<Result<FetchedTransactionBlobs, Error>> => {
-    logger.info(`[BlobFetcher] Fetching blobs for tx: ${job.txHash} in block: ${job.blockHash}`);
+    logger.info(`[BlobFetcher] Fetching blobs for tx: ${job.txHash} in block: ${job.blockHash} (num: ${job.blockNumber}) using REST Beacon API`);
 
     let attempt = 0;
-    let blockSidecarsResponse: EthGetBlobSidecarsRpcResponse | null = null;
+    let beaconApiResponse: BeaconApiGetBlobSidecarsResponse | null = null;
     let lastError: Error | null = null;
 
-    // Ensure blockHash is in Hex format for the RPC call
-    const blockHashHex = job.blockHash.startsWith('0x') ? job.blockHash as Hex : `0x${job.blockHash}` as Hex;
+    // Fetch the block to get its exact slot (post-merge blocks have a slot in the extraData or we can calculate from timestamp)
+    let slotNumber: bigint;
+    try {
+      const block = await viemClient.getBlock({ blockNumber: job.blockNumber });
+      // Calculate slot from timestamp
+      // Mainnet merge timestamp: 1663224179 (Thu Sep 15 2022 06:42:59 GMT+0000)
+      // Mainnet merge slot: 4700013
+      const MERGE_TIMESTAMP = 1663224179n;
+      const MERGE_SLOT = 4700013n;
+      const SECONDS_PER_SLOT = 12n;
+      
+      if (block.timestamp < MERGE_TIMESTAMP) {
+        throw new Error(`Block ${job.blockNumber} is pre-merge and doesn't have blob data`);
+      }
+      
+      slotNumber = MERGE_SLOT + (block.timestamp - MERGE_TIMESTAMP) / SECONDS_PER_SLOT;
+      logger.debug(`[BlobFetcher] Calculated slot ${slotNumber} for block ${job.blockNumber} (timestamp: ${block.timestamp})`);
+    } catch (e: any) {
+      const errorMessage = `[BlobFetcher] Failed to calculate slot for block ${job.blockNumber}: ${e.message}`;
+      logger.error(errorMessage);
+      return Err(new Error(errorMessage));
+    }
 
-    while (attempt < fetcherConfig.retryCount && blockSidecarsResponse === null) {
+    const blockHashHex = job.blockHash.startsWith('0x') ? job.blockHash as Hex : `0x${job.blockHash}` as Hex;
+    
+    // Use dedicated Beacon API URL if available, otherwise append to Execution RPC URL
+    const baseBeaconUrl = appConfig.ethereum.beaconApiUrl || appConfig.ethereum.rpcUrl;
+    
+    // Ensure the Beacon API URL ends with a slash if it doesn't already, to correctly append the path
+    const MUNGED_API_URL = baseBeaconUrl.endsWith('/') ? baseBeaconUrl : `${baseBeaconUrl}/`;
+    // Use slot number instead of block hash
+    const beaconApiUrl = `${MUNGED_API_URL}eth/v1/beacon/blob_sidecars/${slotNumber}`;
+
+    while (attempt < fetcherConfig.retryCount && beaconApiResponse === null) {
       attempt++;
       try {
-        logger.debug(`[BlobFetcher] Attempt ${attempt}: Calling eth_getBlobSidecars for block ${blockHashHex}`);
+        logger.debug(`[BlobFetcher] Attempt ${attempt}: Calling Beacon API for blob sidecars. Slot: ${slotNumber}, Block num: ${job.blockNumber}, URL: ${beaconApiUrl}`);
         
-        // TODO: For proper type safety with Viem, eth_getBlobSidecars should be added to the PublicClient's RpcSchema.
-        // This would allow viemClient.request({ method: 'eth_getBlobSidecars', params: [...] }) to be fully typed.
-        // For now, we cast the response and perform runtime checks.
-        const response = await viemClient.request({
-          method: 'eth_getBlobSidecars' as 'eth_call', // HACK: Casting to a known method to bypass initial type check. This is NOT ideal.
-                                                    // The proper fix is schema extension for the client.
-          params: [blockHashHex] as any, // HACK: Cast params to any. Proper fix is schema extension.
-        });
-        
-        if (Array.isArray(response)) {
-          if (response.every(item => 
-              typeof item === 'object' && 
-              item !== null && 
-              'blob' in item && 
-              'kzgCommitment' in item && 
-              'kzgProof' in item)) {
-            blockSidecarsResponse = response as EthGetBlobSidecarsRpcResponse;
-          } else if (response.length === 0) {
-            blockSidecarsResponse = [];
-          } else {
-            throw new Error('Response items do not match expected RpcBlobSidecar structure');
+        const response = await fetch(beaconApiUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            // Add any other necessary headers, e.g., API keys if the URL doesn't embed them
+            // For QuickNode, the API key is usually part of the URL path.
           }
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.text();
+          throw new Error(`Beacon API request failed with status ${response.status}: ${errorBody}`);
+        }
+
+        const responseData = await response.json() as any; // Cast to any first for validation
+
+        // Validate the structure of the response data
+        if (responseData && Array.isArray(responseData.data) && 
+            typeof responseData.version === 'string') {
+          beaconApiResponse = responseData as BeaconApiGetBlobSidecarsResponse;
         } else {
-          throw new Error('Response from eth_getBlobSidecars was not an array');
+          throw new Error('Beacon API response does not match expected structure BeaconApiGetBlobSidecarsResponse');
         }
 
       } catch (e: any) {
-        lastError = new Error(`[BlobFetcher] Attempt ${attempt} failed for eth_getBlobSidecars for block ${blockHashHex}: ${e.message}`);
-        logger.warn(lastError.message, { stack: e.stack, originalError: e });
+        lastError = new Error(`[BlobFetcher] Attempt ${attempt} failed for Beacon API for slot ${slotNumber} (block num: ${job.blockNumber}): ${e.message}`);
+        logger.warn(lastError.message, JSON.parse(JSON.stringify({ stack: e.stack, originalError: e, blockNumber: job.blockNumber, slot: slotNumber.toString() }, bigIntReplacer)));
         if (attempt < fetcherConfig.retryCount) {
           await sleep(fetcherConfig.retryDelayMs);
         } else {
-          // Ensure loop terminates if all retries failed by setting a non-null value
-          blockSidecarsResponse = []; 
+           // Ensure loop terminates if all retries failed
+          beaconApiResponse = { data: [], version: '', execution_optimistic: false, finalized: false }; // or null to indicate complete failure
         }
       }
     }
 
-    // Check if fetching ultimately failed or returned empty when blobs were expected
-    if (blockSidecarsResponse === null || (blockSidecarsResponse.length === 0 && job.blobVersionedHashes.length > 0 && lastError !== null)) {
-      const errorMessage = `[BlobFetcher] Failed to fetch blob sidecars for block ${blockHashHex} after ${fetcherConfig.retryCount} attempts. Last error: ${lastError?.message || 'Node returned empty or no sidecars, or an unexpected error occurred'}`;
-      logger.error(errorMessage, { lastError });
+    if (beaconApiResponse === null || (beaconApiResponse.data.length === 0 && job.blobVersionedHashes.length > 0 && lastError !== null)) {
+       const errorMessage = `[BlobFetcher] Failed to fetch blob sidecars for slot ${slotNumber} (block num: ${job.blockNumber}) via Beacon API after ${fetcherConfig.retryCount} attempts. Last error: ${lastError?.message || 'Node returned empty or no sidecars, or an unexpected error occurred'}`;
+      logger.error(errorMessage, JSON.parse(JSON.stringify({ lastError, blockNumber: job.blockNumber, slot: slotNumber.toString() }, bigIntReplacer)));
       return Err(new Error(errorMessage));
     }
+    
+    const actualSidecarsData = beaconApiResponse?.data || [];
 
-    const actualSidecars = blockSidecarsResponse || [];
-
-    if (actualSidecars.length === 0 && job.blobVersionedHashes.length > 0) {
-      logger.warn(`[BlobFetcher] No blob sidecars found in block ${blockHashHex} via RPC, but job ${job.txHash} expected ${job.blobVersionedHashes.length} blobs. This could mean the block has no sidecars or there was an issue with the RPC call not caught as an error.`);
-    } else if (actualSidecars.length > 0) {
-      logger.info(`[BlobFetcher] Received ${actualSidecars.length} sidecars for block ${blockHashHex}. Filtering for tx ${job.txHash}.`);
+    if (actualSidecarsData.length === 0 && job.blobVersionedHashes.length > 0) {
+      logger.warn(`[BlobFetcher] No blob sidecars found in slot ${slotNumber} (block num: ${job.blockNumber}) via Beacon API, but job ${job.txHash} expected ${job.blobVersionedHashes.length} blobs.`);
+    } else if (actualSidecarsData.length > 0) {
+      logger.info(`[BlobFetcher] Received ${actualSidecarsData.length} sidecars for slot ${slotNumber} (block num: ${job.blockNumber}) via Beacon API. Filtering for tx ${job.txHash}.`);
     }
+    
+    // Map BeaconApiBlobSidecar to RpcBlobSidecar (which is used by FetchedBlob)
+    // The structure is quite similar.
+    const mappedSidecars: RpcBlobSidecar[] = actualSidecarsData.map(apiSidecar => ({
+        blob: apiSidecar.blob.startsWith('0x') ? apiSidecar.blob : `0x${apiSidecar.blob}` as Hex,
+        kzgCommitment: apiSidecar.kzg_commitment.startsWith('0x') ? apiSidecar.kzg_commitment : `0x${apiSidecar.kzg_commitment}` as Hex,
+        kzgProof: apiSidecar.kzg_proof.startsWith('0x') ? apiSidecar.kzg_proof : `0x${apiSidecar.kzg_proof}` as Hex,
+        // index: apiSidecar.index, // If RpcBlobSidecar type is updated to include index
+    }));
+
 
     const fetchedBlobsForTx: FetchedBlob[] = [];
     const foundVersionedHashes = new Set<string>();
     const errorsEncountered: string[] = [];
 
-    for (const sidecar of actualSidecars) {
+    for (const sidecar of mappedSidecars) { // Use mappedSidecars
       try {
-        const kzgCommitmentHex: Hex = sidecar.kzgCommitment.startsWith('0x') 
-            ? sidecar.kzgCommitment as Hex 
-            : `0x${sidecar.kzgCommitment}` as Hex;
+        const kzgCommitmentHex: Hex = sidecar.kzgCommitment; // Already Hex
         
-        // Pass commitment as an object and specify output type as hex
         const derivedVersionedHash = commitmentToVersionedHash({
           commitment: kzgCommitmentHex,
           to: 'hex'
@@ -120,15 +164,15 @@ export const createBlobFetcher = (
         if (job.blobVersionedHashes.includes(derivedVersionedHash)) {
           fetchedBlobsForTx.push({
             versionedHash: derivedVersionedHash,
-            blob: (sidecar.blob.startsWith('0x') ? sidecar.blob : `0x${sidecar.blob}`) as Hex,
-            kzgProof: (sidecar.kzgProof.startsWith('0x') ? sidecar.kzgProof : `0x${sidecar.kzgProof}`) as Hex,
+            blob: sidecar.blob, // Already Hex
+            kzgProof: sidecar.kzgProof, // Already Hex
             kzgCommitment: kzgCommitmentHex,
           });
           foundVersionedHashes.add(derivedVersionedHash);
         }
       } catch (hashError: any) {
-        const hashErrorMessage = `[BlobFetcher] Error processing sidecar in block ${blockHashHex} (commitment: ${sidecar.kzgCommitment}): ${hashError.message}`;
-        logger.warn(hashErrorMessage, { stack: hashError.stack });
+        const hashErrorMessage = `[BlobFetcher] Error processing sidecar in slot ${slotNumber} (block num: ${job.blockNumber}) (commitment: ${sidecar.kzgCommitment}): ${hashError.message}`;
+        logger.warn(hashErrorMessage, JSON.parse(JSON.stringify({ stack: hashError.stack, blockNumber: job.blockNumber, slot: slotNumber.toString() }, bigIntReplacer)));
         errorsEncountered.push(hashErrorMessage);
       }
     }
@@ -137,7 +181,7 @@ export const createBlobFetcher = (
 
     if (!allExpectedBlobsFound && job.blobVersionedHashes.length > 0) {
       const missingHashes = job.blobVersionedHashes.filter(hash => !foundVersionedHashes.has(hash));
-      const warningMessage = `[BlobFetcher] Not all expected blobs found for tx ${job.txHash}. Expected ${job.blobVersionedHashes.length}, found ${foundVersionedHashes.size}. Missing: ${missingHashes.join(', ')}`;
+      const warningMessage = `[BlobFetcher] Not all expected blobs found for tx ${job.txHash} (block: ${job.blockNumber}). Expected ${job.blobVersionedHashes.length}, found ${foundVersionedHashes.size}. Missing: ${missingHashes.join(', ')}`;
       logger.warn(warningMessage);
       errorsEncountered.push(warningMessage);
     }
@@ -154,12 +198,11 @@ export const createBlobFetcher = (
       allBlobsFound: allExpectedBlobsFound,
       ...(errorsEncountered.length > 0 && { errors: errorsEncountered }),
     };
-
+    
     if (allExpectedBlobsFound || fetchedBlobsForTx.length > 0 || job.blobVersionedHashes.length === 0) {
-      logger.info(`[BlobFetcher] Processed blobs for tx: ${job.txHash}. Found ${fetchedBlobsForTx.length}/${job.blobVersionedHashes.length} expected blobs.`);
+      logger.info(`[BlobFetcher] Processed blobs for tx: ${job.txHash} (block: ${job.blockNumber}). Found ${fetchedBlobsForTx.length}/${job.blobVersionedHashes.length} expected blobs.`);
     } else {
-      // This case means no blobs were found but some were expected.
-      logger.warn(`[BlobFetcher] No relevant blobs found for tx: ${job.txHash} despite expecting ${job.blobVersionedHashes.length}. Result indicates allBlobsFound: ${allExpectedBlobsFound}.`);
+      logger.warn(`[BlobFetcher] No relevant blobs found for tx: ${job.txHash} (block: ${job.blockNumber}) despite expecting ${job.blobVersionedHashes.length}. Result indicates allBlobsFound: ${allExpectedBlobsFound}.`);
     }
     
     return Ok(resultData);
