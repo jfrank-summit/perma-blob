@@ -19,11 +19,27 @@ export const createMonitorState = async (
   })
   
   const stateRepo = createMonitorStateRepository(db)
-  const lastProcessedBlock = await stateRepo.getLastProcessedBlock()
+  let lastProcessedBlock = await stateRepo.getLastProcessedBlock()
+
+  if (lastProcessedBlock === 0n && config.blocksFromHead !== undefined && config.blocksFromHead > 0) {
+    try {
+      const latestBlock = await client.getBlockNumber()
+      const calculatedStartBlock = latestBlock - BigInt(config.blocksFromHead)
+      lastProcessedBlock = calculatedStartBlock > 0n ? calculatedStartBlock : 0n
+      logger.info(`[Monitor] No previous state found. Starting from ${config.blocksFromHead} blocks behind head: new lastProcessedBlock is ${lastProcessedBlock}`)
+    } catch (error) {
+      logger.error("[Monitor] Failed to fetch latest block to calculate startBlock from blocksFromHead. Defaulting lastProcessedBlock to 0.", error)
+      lastProcessedBlock = 0n
+    }
+  } else if (lastProcessedBlock === 0n) {
+    logger.info("[Monitor] No previous state and no BLOCKS_FROM_HEAD configured (or is 0). Monitor will start processing from block 0 or wait for target block > 0.")
+  } else {
+    logger.info(`[Monitor] Resuming from last processed block: ${lastProcessedBlock}`)
+  }
   
   return {
     isRunning: false,
-    lastProcessedBlock: config.startBlock ?? lastProcessedBlock,
+    lastProcessedBlock,
     client,
     monitorId: 'default-monitor'
   }

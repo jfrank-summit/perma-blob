@@ -17,10 +17,10 @@ const configSchema = z.object({
     rpcUrl: z.string().url(),
     beaconApiUrl: z.string().url().optional(),
     baseContracts: z.array(z.string()),
-    confirmations: z.number().int().positive(),
-    batchSize: z.number().int().positive(),
-    startBlock: z.bigint().nonnegative(),
-    l2Source: z.string(),
+    confirmations: z.number().int().positive().default(6),
+    batchSize: z.number().int().positive().default(10),
+    blocksFromHead: z.number().int().nonnegative().optional(),
+    l2Source: z.string().default('base'),
   }),
   
   // Auto Drive
@@ -94,9 +94,9 @@ export const loadConfig = (): Config => {
       rpcUrl: ethereumRpcUrl,
       beaconApiUrl: beaconApiUrl,
       baseContracts: process.env['BASE_CONTRACTS'] ? process.env['BASE_CONTRACTS'].split(',') : [],
-      confirmations: process.env['CONFIRMATIONS'] ? parseInt(process.env['CONFIRMATIONS'], 10) : 3,
-      batchSize: process.env['BATCH_SIZE'] ? parseInt(process.env['BATCH_SIZE'], 10) : 10,
-      startBlock: process.env['START_BLOCK'] ? BigInt(process.env['START_BLOCK']) : 0,
+      confirmations: process.env['CONFIRMATIONS'] ? parseInt(process.env['CONFIRMATIONS']) : undefined,
+      batchSize: process.env['BATCH_SIZE'] ? parseInt(process.env['BATCH_SIZE']) : undefined,
+      blocksFromHead: process.env['BLOCKS_FROM_HEAD'] ? parseInt(process.env['BLOCKS_FROM_HEAD']) : undefined,
       l2Source: process.env['L2_SOURCE'] || 'base',
     },
     autoDrive: {

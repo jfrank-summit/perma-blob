@@ -65,7 +65,7 @@ const main = async () => {
       confirmations: config.ethereum.confirmations,
       batchSize: config.ethereum.batchSize,
       l2Source: config.ethereum.l2Source,
-      ...(config.ethereum.startBlock !== undefined && { startBlock: config.ethereum.startBlock })
+      ...(config.ethereum.blocksFromHead !== undefined && { blocksFromHead: config.ethereum.blocksFromHead })
     }
     
     const initialMonitorState = await createMonitorState(monitorConfig, db)

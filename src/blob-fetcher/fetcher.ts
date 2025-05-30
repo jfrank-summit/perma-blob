@@ -52,6 +52,7 @@ export const createBlobFetcher = (
 
     // Fetch the block to get its exact slot (post-merge blocks have a slot in the extraData or we can calculate from timestamp)
     let slotNumber: bigint;
+    let blockRootHashFromHeader: string | undefined;
     try {
       const block = await viemClient.getBlock({ blockNumber: job.blockNumber });
       // Calculate slot from timestamp
