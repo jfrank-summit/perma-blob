@@ -1,8 +1,11 @@
 import Redis from 'ioredis';
 import type { Config } from '../shared/config.js';
 import { logger } from '../shared/logger.js';
+import type { FetchedTransactionBlobs } from '../blob-fetcher/types.js';
 import { createBlobArchiver } from './archiver.js';
-import type { ArchivalJobData, ArchivalResult } from './types.js';
+import type { ArchivalResult } from './types.js';
+import { bigIntReviver } from '../shared/json-utils.js';
+
 // We might need a separate queue for results/failures of archival, or log them, or send to a dead-letter queue.
 // For now, we'll log and can decide on a specific output queue later if needed.
 // const ARCHIVAL_SUCCESS_QUEUE_KEY = 'blob_archival_success_queue';
@@ -27,33 +30,37 @@ export const createBlobArchiverWorker = async (config: Config) => {
   let isShuttingDown = false;
 
   const processJob = async (jobString: string): Promise<void> => {
+    let jobData: FetchedTransactionBlobs | null = null;
     try {
-      const jobData: ArchivalJobData = JSON.parse(jobString);
+      jobData = JSON.parse(jobString, bigIntReviver) as FetchedTransactionBlobs;
       logger.info(`[BlobArchiverWorker] Dequeued archival job for tx: ${jobData.transactionHash}`);
 
-      const archivalResult: ArchivalResult = await blobArchiver.archiveBlobData(jobData);
+      const resultDetails: ArchivalResult = await blobArchiver.archiveBlobData(jobData);
 
-      if (archivalResult.success) {
-        logger.info(`[BlobArchiverWorker] Successfully processed archival for tx: ${jobData.transactionHash}. Message: ${archivalResult.message}`, {
-          transactionHash: jobData.transactionHash,
-          results: archivalResult.blobArchivalDetails,
+      // Now, check the .success field of ArchivalResult
+      if (resultDetails.success) {
+        logger.info(`[BlobArchiverWorker] Successfully processed archival for tx: ${resultDetails.transactionHash}. Message: ${resultDetails.message}`, {
+          transactionHash: resultDetails.transactionHash,
+          details: resultDetails.blobArchivalDetails,
         });
-        // Optionally, push to a success queue or database log
       } else {
-        logger.error(`[BlobArchiverWorker] Failed to archive blobs for tx: ${jobData.transactionHash}. Error: ${archivalResult.error || archivalResult.message}`, {
-          transactionHash: jobData.transactionHash,
-          details: archivalResult.blobArchivalDetails,
-          overallError: archivalResult.error,
+        // This case means the archival process itself determined a failure (e.g., some blobs failed or setup failed)
+        logger.error(`[BlobArchiverWorker] Archival process completed with failures for tx: ${resultDetails.transactionHash}. Message: ${resultDetails.message}`, {
+          transactionHash: resultDetails.transactionHash,
+          details: resultDetails.blobArchivalDetails,
+          overallError: resultDetails.error, // The error field within ArchivalResult
         });
-        // TODO: Implement dead-letter queue or other error handling for persistent archival failures
       }
     } catch (error: any) {
-      logger.error('[BlobArchiverWorker] Error processing job string or during archival operation:', { 
-        error: error.message, 
-        jobString, 
-        stack: error.stack 
+      // This catches errors from JSON.parse or if archiveBlobData throws an unexpected exception
+      const txHash = jobData?.transactionHash || 'unknown_tx_hash_due_to_parse_failure';
+      logger.error(`[BlobArchiverWorker] Critical error processing job for tx: ${txHash}. Error: ${error.message}`, { 
+        transactionHash: txHash,
+        errorName: error.name,
+        errorMessage: error.message, 
+        errorStack: error.stack,
+        jobString, // Log the raw job string in case of parse failure
       });
-      // Handle potential JSON parse errors or unexpected issues in archiveBlobData
     }
   };
 
@@ -69,8 +76,10 @@ export const createBlobArchiverWorker = async (config: Config) => {
           logger.debug('[BlobArchiverWorker] No job in archive queue, waiting...');
         }
       } catch (err: any) {
-        logger.error('[BlobArchiverWorker] Error during Redis BRPOP or job processing:', err);
+        // Log errors from BRPOP itself, not from processJob (which has its own try-catch)
+        logger.error('[BlobArchiverWorker] Error during Redis BRPOP operation:', err);
         if (!isShuttingDown) {
+          // Avoid busy-looping on persistent Redis errors
           await new Promise(resolve => setTimeout(resolve, POLLING_INTERVAL_MS * 5)); 
         }
       }
@@ -81,7 +90,7 @@ export const createBlobArchiverWorker = async (config: Config) => {
   const start = () => {
     isShuttingDown = false;
     work().catch(err => {
-      logger.error('[BlobArchiverWorker] Unhandled error in work loop:', err);
+      logger.error('[BlobArchiverWorker] Unhandled error in work loop (should not happen if processJob catches its errors):', err);
     });
     logger.info('[BlobArchiverWorker] Worker started.');
   };

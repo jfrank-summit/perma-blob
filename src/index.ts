@@ -8,6 +8,7 @@ import type { ProcessingJob, MonitorConfig } from './blob-monitor/index.js'
 import { createBlobFetcherWorker } from './blob-fetcher/index.js'
 import { createBlobArchiverWorker } from './blob-archiver/index.js'
 import Redis from 'ioredis'
+import { bigIntReplacer } from './shared/json-utils.js'
 
 const BLOB_FETCH_QUEUE_KEY = 'blob_fetch_jobs_queue'
 
@@ -41,12 +42,12 @@ const main = async () => {
     await db.migrate()
     
     // Create repositories
-    const monitorState = createMonitorStateRepository(db)
+    const monitorStateRepo = createMonitorStateRepository(db)
     // TODO: Use archivedBlobs repository when implementing archival
     // const archivedBlobs = createArchivedBlobsRepository(db)
     
     // Test database connection
-    const lastBlock = await monitorState.getLastProcessedBlock()
+    const lastBlock = await monitorStateRepo.getLastProcessedBlock()
     logger.info(`Last processed block from DB: ${lastBlock}`)
     
     // Initialize and start Blob Fetcher Worker
@@ -63,7 +64,7 @@ const main = async () => {
       baseContracts: config.ethereum.baseContracts.map(addr => addr as `0x${string}`),
       confirmations: config.ethereum.confirmations,
       batchSize: config.ethereum.batchSize,
-      l2Source: 'base',
+      l2Source: config.ethereum.l2Source,
       ...(config.ethereum.startBlock !== undefined && { startBlock: config.ethereum.startBlock })
     }
     
@@ -79,11 +80,16 @@ const main = async () => {
       // Enqueue job for blob fetching
       if (redisClient) {
         try {
-          await redisClient.lpush(BLOB_FETCH_QUEUE_KEY, JSON.stringify(job))
+          await redisClient.lpush(BLOB_FETCH_QUEUE_KEY, JSON.stringify(job, bigIntReplacer))
           logger.info(`[Main] Enqueued job for tx: ${job.txHash} to ${BLOB_FETCH_QUEUE_KEY}`)
-        } catch (err) {
-          logger.error('[Main] Failed to enqueue job to Redis:', { error: err, txHash: job.txHash })
-          // TODO: Add retry or dead-letter logic for enqueue failures
+        } catch (err: any) {
+          logger.error('[Main] Failed to enqueue job to Redis:', { 
+            errorName: err.name, 
+            errorMessage: err.message, 
+            errorStack: err.stack,
+            originalErrorObject: err,
+            txHash: job.txHash 
+          })
         }
       } else {
         logger.error('[Main] Redis client not initialized. Cannot enqueue job.', { txHash: job.txHash })

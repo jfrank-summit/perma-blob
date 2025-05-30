@@ -6,6 +6,7 @@ import { createBlobFetcher } from './fetcher.js';
 import type { PublicClient } from 'viem';
 import { createPublicClient, http } from 'viem';
 import { mainnet } from 'viem/chains';
+import { bigIntReplacer, bigIntReviver } from '../shared/json-utils.js';
 
 const BLOB_FETCH_QUEUE_KEY = 'blob_fetch_jobs_queue';
 const BLOB_ARCHIVE_QUEUE_KEY = 'blob_archive_jobs_queue'; // For results
@@ -38,7 +39,7 @@ export const createBlobFetcherWorker = async (config: Config) => {
 
   const processJob = async (jobString: string): Promise<void> => {
     try {
-      const job: ProcessingJob = JSON.parse(jobString);
+      const job: ProcessingJob = JSON.parse(jobString, bigIntReviver);
       logger.info(`[BlobFetcherWorker] Dequeued job for tx: ${job.txHash}`);
 
       const fetchResult = await blobFetcher.fetchBlobsForJob(job);
@@ -46,8 +47,7 @@ export const createBlobFetcherWorker = async (config: Config) => {
       if (fetchResult.ok) {
         const fetchedData = fetchResult.value;
         logger.info(`[BlobFetcherWorker] Successfully fetched ${fetchedData.fetchedBlobs.length} blobs for tx: ${job.txHash}. Enqueueing for archival.`);
-        // Enqueue FetchedTransactionBlobs to the archive queue
-        await redisClient.lpush(BLOB_ARCHIVE_QUEUE_KEY, JSON.stringify(fetchedData));
+        await redisClient.lpush(BLOB_ARCHIVE_QUEUE_KEY, JSON.stringify(fetchedData, bigIntReplacer));
       } else {
         logger.error(`[BlobFetcherWorker] Failed to fetch blobs for tx: ${job.txHash}. Error: ${fetchResult.error.message}`, { job });
         // TODO: Implement dead-letter queue or other error handling for persistent fetch failures
