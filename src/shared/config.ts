@@ -4,13 +4,14 @@ import dotenv from 'dotenv'
 // Load environment variables
 dotenv.config()
 
+const databaseSchema = z.object({
+  type: z.literal('sqlite').default('sqlite'), // Only sqlite
+  sqlitePath: z.string().min(1).default('./data/perma-blob.db'),  
+});
+
 const configSchema = z.object({
   // Database
-  database: z.object({
-    type: z.enum(['pglite', 'postgres']),
-    pglitePath: z.string().optional(),
-    postgresUrl: z.string().optional(),
-  }),
+  database: databaseSchema,
   
   // Ethereum
   ethereum: z.object({
@@ -25,53 +26,55 @@ const configSchema = z.object({
   
   // Auto Drive
   autoDrive: z.object({
-    apiKey: z.string(),
-    network: z.enum(['MAINNET', 'TAURUS']),
+    apiKey: z.string().min(1, "AUTO_DRIVE_API_KEY is required"),
+    network: z.enum(['MAINNET', 'TAURUS']).default('TAURUS'),
   }),
   
   // Redis
   redis: z.object({
-    url: z.string(),
+    url: z.string().default('redis://localhost:6379'),
   }),
   
   // API Server
   api: z.object({
-    port: z.number().int().positive(),
-    host: z.string(),
+    port: z.number().int().positive().default(3000),
+    host: z.string().default('0.0.0.0'),
   }),
   
   // Logging
   logging: z.object({
-    level: z.enum(['debug', 'info', 'warn', 'error']),
+    level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
     filePath: z.string().optional(),
     maxSizeMB: z.number().positive().optional(),
-    maxFiles: z.number().int().positive().optional()
+    maxFiles: z.number().int().positive().optional(),
   }),
 
   // Blob Fetcher
   blobFetcher: z.object({
-    retryCount: z.number().int().positive(),
-    retryDelayMs: z.number().int().positive(),
-  }).optional(),
+    retryCount: z.number().int().positive().default(3),
+    retryDelayMs: z.number().int().positive().default(2000),
+  }).optional(), // Making entire object optional, with defaults for its fields
 
   // Blob Archiver
   blobArchiver: z.object({
-    autoDriveContainerName: z.string().optional(),
-    autoDriveCreateContainerIfNotExists: z.boolean().optional(),
+    autoDriveContainerName: z.string().optional().default('eth-l2-blobs'),
+    autoDriveCreateContainerIfNotExists: z.boolean().optional().default(true),
   }).optional(),
 })
 
 export type Config = z.infer<typeof configSchema>
 
-const parseEnvNumber = (value: string | undefined, defaultValue: number): number => {
-  const parsed = parseInt(value || '', 10)
-  return isNaN(parsed) ? defaultValue : parsed
-}
+const parseEnvNumber = (value: string | undefined, defaultValue?: number): number | undefined => {
+  if (value === undefined && defaultValue === undefined) return undefined;
+  const parsed = parseInt(value || '', 10);
+  return isNaN(parsed) ? defaultValue : parsed;
+};
 
 // Helper function for parsing boolean environment variables
-const parseEnvBoolean = (value: string | undefined, defaultValue: boolean): boolean => {
-  if (value === undefined) return defaultValue;
-  return value.toLowerCase() === 'true';
+const parseEnvBoolean = (value: string | undefined, defaultValue?: boolean): boolean | undefined => {
+  if (value === undefined && defaultValue === undefined) return undefined;
+  if (value === undefined && defaultValue !== undefined) return defaultValue;
+  return value!.toLowerCase() === 'true';
 };
 
 export const loadConfig = (): Config => {
@@ -82,59 +85,56 @@ export const loadConfig = (): Config => {
     throw new Error('ETH_RPC_URL is not set in the environment variables.');
   }
 
-  const beaconApiUrl = process.env['BEACON_API_URL'];
-
   const rawConfig = {
     database: {
-      type: process.env['DATABASE_TYPE'] || 'pglite',
-      pglitePath: process.env['PGLITE_PATH'] || './data/blobs.db',
-      postgresUrl: process.env['POSTGRES_URL'],
+      type: 'sqlite', // Hardcode to sqlite
+      sqlitePath: process.env['SQLITE_PATH'], 
     },
     ethereum: {
       rpcUrl: ethereumRpcUrl,
-      beaconApiUrl: beaconApiUrl,
+      beaconApiUrl: process.env['BEACON_API_URL'],
       baseContracts: process.env['BASE_CONTRACTS'] ? process.env['BASE_CONTRACTS'].split(',') : [],
-      confirmations: process.env['CONFIRMATIONS'] ? parseInt(process.env['CONFIRMATIONS']) : undefined,
-      batchSize: process.env['BATCH_SIZE'] ? parseInt(process.env['BATCH_SIZE']) : undefined,
-      blocksFromHead: process.env['BLOCKS_FROM_HEAD'] ? parseInt(process.env['BLOCKS_FROM_HEAD']) : undefined,
-      l2Source: process.env['L2_SOURCE'] || 'base',
+      confirmations: parseEnvNumber(process.env['CONFIRMATIONS']),
+      batchSize: parseEnvNumber(process.env['BATCH_SIZE']),
+      blocksFromHead: parseEnvNumber(process.env['BLOCKS_FROM_HEAD']),
+      l2Source: process.env['L2_SOURCE'],
     },
     autoDrive: {
-      apiKey: process.env['AUTO_DRIVE_API_KEY'] || '',
-      network: process.env['AUTO_DRIVE_NETWORK'] || 'MAINNET',
+      apiKey: process.env['AUTO_DRIVE_API_KEY'],
+      network: process.env['AUTO_DRIVE_NETWORK'] as 'MAINNET' | 'TAURUS' | undefined,
     },
     redis: {
-      url: process.env['REDIS_URL'] || 'redis://localhost:6379',
+      url: process.env['REDIS_URL'],
     },
     api: {
-      port: parseEnvNumber(process.env['PORT'], 3000),
-      host: process.env['HOST'] || '0.0.0.0',
+      port: parseEnvNumber(process.env['PORT']),
+      host: process.env['HOST'],
     },
     logging: {
-      level: process.env['LOG_LEVEL'] || 'info',
-      filePath: process.env['LOG_FILE_PATH'] || './logs/app.log',
-      maxSizeMB: parseEnvNumber(process.env['LOG_MAX_SIZE_MB'], 50),
-      maxFiles: parseEnvNumber(process.env['LOG_MAX_FILES'], 5)
+      level: (process.env['LOG_LEVEL'] || 'info') as 'debug' | 'info' | 'warn' | 'error',
+      filePath: process.env['LOG_FILE_PATH'],
+      maxSizeMB: parseEnvNumber(process.env['LOG_MAX_SIZE_MB']),
+      maxFiles: parseEnvNumber(process.env['LOG_MAX_FILES'])
     },
     blobFetcher: {
-      retryCount: parseEnvNumber(process.env['BLOB_FETCHER_RETRY_COUNT'], 3),
-      retryDelayMs: parseEnvNumber(process.env['BLOB_FETCHER_RETRY_DELAY_MS'], 2000),
+      retryCount: parseEnvNumber(process.env['BLOB_FETCHER_RETRY_COUNT']),
+      retryDelayMs: parseEnvNumber(process.env['BLOB_FETCHER_RETRY_DELAY_MS']),
     },
     blobArchiver: {
-      autoDriveContainerName: process.env['AUTO_DRIVE_CONTAINER_NAME'] || 'eth-l2-blobs',
-      autoDriveCreateContainerIfNotExists: parseEnvBoolean(process.env['AUTO_DRIVE_CREATE_CONTAINER'], true),
+      autoDriveContainerName: process.env['AUTO_DRIVE_CONTAINER_NAME'],
+      autoDriveCreateContainerIfNotExists: parseEnvBoolean(process.env['AUTO_DRIVE_CREATE_CONTAINER']),
     },
   }
   
   try {
-    return configSchema.parse(rawConfig)
+    const parsedConfig = configSchema.parse(rawConfig)
+    return parsedConfig
   } catch (error) {
-    console.error('Configuration validation failed:')
     if (error instanceof z.ZodError) {
-      error.errors.forEach(err => {
-        console.error(`  ${err.path.join('.')}: ${err.message}`)
-      })
+      console.error('Configuration validation error:', JSON.stringify(error.issues, null, 2));
+    } else {
+      console.error('Unknown error during configuration loading:', error)
     }
-    throw new Error('Invalid configuration')
+    throw new Error('Configuration validation failed')
   }
 } 

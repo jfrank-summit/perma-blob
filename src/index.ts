@@ -5,6 +5,7 @@ import { loadConfig } from './shared/config.js'
 import { logger } from './shared/logger.js'
 import { createMonitorState, startMonitor } from './blob-monitor/index.js'
 import type { ProcessingJob, MonitorConfig } from './blob-monitor/index.js'
+import type { DatabaseConfig } from './database/types.js'
 import { createBlobFetcherWorker } from './blob-fetcher/index.js'
 import { createBlobArchiverWorker } from './blob-archiver/index.js'
 import Redis from 'ioredis'
@@ -31,11 +32,12 @@ const main = async () => {
     
     // Initialize database
     logger.info(`Initializing ${config.database.type} database...`)
-    const dbConfig = config.database.type === 'pglite' 
-      ? { type: 'pglite' as const, pglitePath: config.database.pglitePath || './data/blobs.db' }
-      : { type: 'postgres' as const, postgresUrl: config.database.postgresUrl || '' }
+    const dbConfigForCreate: DatabaseConfig = {
+      type: 'sqlite',
+      sqlitePath: config.database.sqlitePath,
+    }
     
-    const db = await createDatabase(dbConfig)
+    const db = await createDatabase(dbConfigForCreate)
     
     // Run migrations
     logger.info('Running database migrations...')

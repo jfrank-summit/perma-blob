@@ -1,7 +1,6 @@
 export type DatabaseConfig = {
-  type: 'pglite' | 'postgres'
-  pglitePath?: string
-  postgresUrl?: string
+  type: 'sqlite'
+  sqlitePath: string
 }
 
 export type QueryResult<T = any> = {
