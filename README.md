@@ -24,8 +24,8 @@ Key features:
 
 - Node.js 18+ 
 - Yarn package manager
+- SQLite (default for local development)
 - Redis (optional, for production job queue)
-- PostgreSQL (optional, for production database)
 
 ## Getting Started
 
@@ -63,16 +63,18 @@ Then configure the following:
 #### Configuration Options
 
 ```bash
-# Database (defaults to local PGLite)
-DATABASE_TYPE=pglite          # Use 'postgres' for production
-PGLITE_PATH=./data/blobs.db   # Local database file
+# Database (defaults to local SQLite)
+DATABASE_TYPE=sqlite          # Use 'postgres' for production if needed
+SQLITE_PATH=./data/perma-blob.db   # Local SQLite database file
 
 # Ethereum Configuration  
 ETH_RPC_URL=                  # Your Ethereum RPC endpoint
+BEACON_API_URL=               # Your Beacon API endpoint (e.g., from QuickNode)
 BASE_CONTRACTS=0x49048044D57e1C92A77f79988d21Fa8fAF74E97e,0xff00000000000000000000000000000000008453  # Base L2 contracts
-CONFIRMATIONS=3               # Blocks to wait before processing
+CONFIRMATIONS=6               # Blocks to wait before processing
 BATCH_SIZE=10                 # Blocks to process in parallel
-START_BLOCK=22590930          # Optional: specific block to start from (contains Base blobs)
+BLOCKS_FROM_HEAD=100          # Optional: How many blocks from head to start if no DB state. 0 to start from earliest possible.
+L2_SOURCE=base                # L2 source identifier
 
 # Auto Drive
 AUTO_DRIVE_API_KEY=           # Your API key from ai3.storage
@@ -81,12 +83,23 @@ AUTO_DRIVE_NETWORK=TAURUS     # TAURUS (testnet) or MAINNET
 # Redis (optional, for production)
 REDIS_URL=redis://localhost:6379
 
-# API Server
+# API Server (if/when implemented)
 PORT=3000
 HOST=0.0.0.0
 
 # Logging
 LOG_LEVEL=info                # debug, info, warn, error
+# LOG_FILE_PATH=./logs/app.log
+# LOG_MAX_SIZE_MB=10
+# LOG_MAX_FILES=5
+
+# Blob Fetcher Configuration (optional, defaults are set in code)
+# BLOB_FETCHER_RETRY_COUNT=3
+# BLOB_FETCHER_RETRY_DELAY_MS=2000
+
+# Blob Archiver Configuration (optional, defaults are set in code)
+# AUTO_DRIVE_CONTAINER_NAME=perma-blob-testnet
+# AUTO_DRIVE_CREATE_CONTAINER=true
 ```
 
 ### 3. Run the System
@@ -140,12 +153,13 @@ yarn format            # Prettier formatting
 
 ### Database Management
 
-The system uses PGLite for local development and can migrate to PostgreSQL for production. Migrations run automatically on startup.
+The system uses SQLite for local development by default and can be configured to use PostgreSQL for production. Migrations run automatically on startup.
 
-To use PostgreSQL in production:
+To use PostgreSQL in production (ensure `DATABASE_TYPE=postgres` in `.env`):
 ```bash
+# In your .env file for production:
 DATABASE_TYPE=postgres
-DATABASE_URL=postgresql://user:password@host:5432/database
+POSTGRES_URL=postgresql://user:password@host:5432/database
 ```
 
 ### Components
@@ -180,7 +194,7 @@ By archiving to Autonomys Network, we ensure this data remains permanently acces
 
 For production deployment:
 
-1. Use PostgreSQL instead of PGLite
+1. Use PostgreSQL instead of SQLite
 2. Set up Redis for job queue management
 3. Configure proper RPC endpoints with rate limiting
 4. Use environment-specific `.env` files
