@@ -78,8 +78,7 @@ const processBlockRange = async (
   toBlock: bigint,
   onBlobFound: (blob: ProcessingJob) => Promise<void>
 ): Promise<bigint> => {
-  const configBatchSize = config.batchSize || 10
-  const batchSize = configBatchSize > 5 ? 5 : configBatchSize // Reduce batch size for debugging
+  const batchSize = config.batchSize || 10
   let currentBlock = fromBlock
   let processedCount = 0
   
